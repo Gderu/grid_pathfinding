@@ -2,6 +2,7 @@ use rand::Rng;
 use rand::prelude::ThreadRng;
 use std::ops::Range;
 use std::io;
+use std::f32::consts::PI;
 
 const NUM_SHAPES: usize = 5;
 const MAP_WIDTH: f32 = 1000.;
@@ -18,6 +19,7 @@ struct Line {
 struct Map {
     map: Vec<Line>,
     agent_pos: (f32, f32),
+    agent_walls: Option<(usize, usize)>,
     goal_pos: (f32, f32),
 }
 
@@ -30,6 +32,7 @@ impl Map {
         Map {
             map: map.into_iter().flat_map(|l| l).collect(),
             agent_pos,
+            agent_walls: None,
             goal_pos,
         }
     }
@@ -102,11 +105,16 @@ impl Map {
         result
     }
 
-    //finds the closest point on a shape in the direction of variable point. Adds said point to result. Calls itself if the point found was a vertice with another point behind it.
+    //finds the closest point on a shape in the direction of variable point. Adds said point to result. Calls itself if the point found was a vertices with another point behind it.
+    //If the target point is on the opposite side of the wall the agent is currently on, will not add point to result
     fn find_closest_point(&self, point: (f32, f32), result: &mut Vec<(f32, f32)>, recursive: bool) {
         let mut shortest_dist = -1.;
         let mut closest_point_ray = None;
         let ray = (point.0 - self.agent_pos.0, point.1 - self.agent_pos.1);
+
+        if !self.is_legal_ray(ray) {
+            return;
+        }
 
         if point == self.goal_pos {//if the point is the goal, make the default value be the distance to it and it being the target. If there is a line between the goal and the current position, it will override this
             shortest_dist = 1.;
@@ -125,7 +133,7 @@ impl Map {
             } else {
                 continue;
             };
-            if t1 >= 0. && t2 >= 0. && 1. >= t2 &&
+            if t1 > 0. && t2 >= 0. && 1. >= t2 &&
                 (shortest_dist == -1. || shortest_dist > t1) {//if the point is on the line in the shape and is the closest point found so far
 
                 shortest_dist = t1;
@@ -152,6 +160,25 @@ impl Map {
         }
     }
 
+    fn is_legal_ray(&self, to_check: (f32, f32)) -> bool {
+        if let Some(agent_walls) = self.agent_walls {
+            let ray1 = self.map[agent_walls.0].ray;
+            let ray2 = (-self.map[agent_walls.1].ray.0, -self.map[agent_walls.1].ray.1);
+            let thetas = [f32::acos(ray1.1 / dist((0., 0.), ray1)), f32::acos(ray2.1 / dist((0., 0.), ray2))];
+            let (theta_max, theta_min) = if thetas[0] > thetas[1] {
+                (thetas[0], thetas[1])
+            } else {
+                (thetas[1], thetas[0])
+            };
+            let &theta_diff = [theta_max - theta_min, theta_max + theta_min - 2. * PI].iter().min_by(|a, b| a.partial_cmp(&b).unwrap()).unwrap();
+            let ray_angle = f32::acos(to_check.1 / dist((0., 0.), to_check));
+
+            (theta_min < ray_angle && ray_angle < theta_max) == (theta_diff == theta_max - theta_min)//true if ray_angle is between the smaller angle of theta_max and theta_min
+        } else {
+            true //the agent is not on a wall, so every move should be legal
+        }
+    }
+
     fn get_agent_pos(&self) -> (f32, f32) {
         self.agent_pos
     }
@@ -164,24 +191,23 @@ impl Map {
     Target has to have been a position returned from get_agent_view - the function does not check its validity.
     Returns the distance to target.*/
     fn move_agent(&mut self, target: (f32, f32)) -> f32 {
-        let mut x = target.0 - self.agent_pos.0;
-        x = if x > 0. {
-            x * 0.9999
-        } else if x < 0. {
-            x * 1.0001
-        } else {
-            x
-        };
-        let mut y = target.1 - self.agent_pos.1;
-        y = if y > 0. {
-            y * 0.9999
-        } else if y < 0. {
-            y * 1.0001
-        } else {
-            y
-        };
-        let distance = (x.powf(2.) + y.powf(2.)).sqrt();
-        self.agent_pos = (self.agent_pos.0 + x, self.agent_pos.1 + y);
+        let distance = ((target.1 - self.agent_pos.1).powf(2.) + (target.0 - self.agent_pos.0).powf(2.)).sqrt();
+        let mut counter = 0;
+        let mut new_agent_walls = (0, 0);
+        for (i, line) in self.map.iter().enumerate() {
+            if line.origin == target {
+                new_agent_walls.0 = i;
+                counter += 1;
+            } else if line.target == target {
+                new_agent_walls.1 = i;
+                counter += 1;
+            }
+            if counter == 2 {
+                self.agent_walls = Some(new_agent_walls);
+                break;
+            }
+        }
+        self.agent_pos = target;
         return distance
     }
 
@@ -201,9 +227,10 @@ fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
 
 fn hill_climbing_search(children: Vec<(f32, f32)>, curr_pos: (f32, f32), goal_pos: (f32, f32)) -> (f32, f32) {
     let h_n = |point| dist(curr_pos, point) + dist(point, goal_pos) * 2.;
+    println!("{:?}", &children);
     *children.iter()
-        .filter(|&&pos| dist(pos, curr_pos) >= 0.01)
-        .min_by(|&&a, &&b| h_n(a).partial_cmp(&h_n(b)).expect("No NaNs")).expect("Should never happenz")
+        .filter(|&&a| dist(a, curr_pos) > 0.0001)
+        .min_by(|&&a, &&b| h_n(a).partial_cmp(&h_n(b)).expect("No NaNs")).expect("Should never happens")
 
 }
 
@@ -227,15 +254,12 @@ fn main() {
             return;
         }
         score -= map.move_agent(target);
-        println!("target: {:?}", map.get_agent_pos());
+        //println!("target: {:?}", map.get_agent_pos());
 
         path.push(map.get_agent_pos());
-        io::stdin().read_line(&mut String::new());
+        //io::stdin().read_line(&mut String::new());
         if map.reached_goal() {
             println!("IN");
-            for line in &map.map {
-                println!("{:?}, {:?}", line.origin, line.target);
-            }
             println!("Path:");
             for point in path {
                 println!("{:?}", point);
