@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::f64::consts::PI;
 use std::collections::HashMap;
 
-const NUM_SHAPES: usize = 20;
+const NUM_SHAPES: usize = 50;
 const MAP_WIDTH: f64 = 1000.;
 const MAP_HEIGHT: f64 = 1000.;
 const RADIUS_RANGE: Range<i32> = 100..200;
@@ -21,6 +21,7 @@ struct Map {
     agent_pos: (f64, f64),
     agent_walls: Option<(usize, usize)>,
     goal_pos: (f64, f64),
+    original_agent_pos: (f64, f64),
 }
 
 impl Map {
@@ -50,6 +51,7 @@ impl Map {
             map: map.into_iter().flat_map(|l| l).collect(),
             agent_pos,
             agent_walls: None,
+            original_agent_pos: agent_pos,
             // agent_walls: Some((0, 1)),
             goal_pos,
         }
@@ -277,6 +279,10 @@ impl Map {
     fn reached_goal(&self) -> bool {
         dist(self.agent_pos, self.goal_pos) < 0.01
     }
+
+    fn reset_agent_pos(&mut self) {
+        self.agent_pos = self.original_agent_pos;
+    }
 }
 
 fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
@@ -316,16 +322,32 @@ fn main() {
     let mut score_ltra = 0.;
     let mut num_solutions_hill_climbing = 0;
     let mut num_solutions_ltra = 0;
-    for _ in 0..100 {
+    for line in &map.map {
+        println!("\\operatorname{{polygon}}({:?},{:?})", line.origin, line.target);
+    }
+    println!("{:?}", map.get_agent_pos());
+    println!("{:?}", map.get_goal_pos());
+    for _ in 0..1 {
         let (is_valid_hill_climbing, new_score_hill_climbing) = hill_climbing_algorithm(&mut map);
+        map.reset_agent_pos();
         let (is_valid_ltra, new_score_ltra) = ltra_algorithm(&mut map);
-        if is_valid_ltra.is_some() {
+        if let Some(path) = is_valid_ltra {
+            println!("LTRA* solution:");
+            for point in path {
+                println!("{:?}", point);
+            }
             score_ltra += new_score_ltra;
             num_solutions_ltra += 1;
         }
-        if is_valid_hill_climbing.is_some() {
+        if let Some(path) = is_valid_hill_climbing {
+            println!("Hill Climbing solution:");
+            for point in path {
+                println!("{:?}", point);
+            }
             score_hill_climbing += new_score_hill_climbing;
             num_solutions_hill_climbing += 1;
+        } else {
+            println!("Hill climbing couldn't find solution");
         }
     }
     println!("Hill Climbing score: {:.5}\nHill Climbing solutions: {}\n\nLTRA* score: {:.5}\nLTRA* solutions: {}", score_hill_climbing, num_solutions_hill_climbing, score_ltra, num_solutions_ltra);
@@ -352,7 +374,8 @@ fn hill_climbing_algorithm(map: &mut Map) -> (Option<Vec<(f64, f64)>>, f64) {
     let mut remember = vec![];
     loop {
         let target = hill_climbing_search(map.get_agent_view(), map.get_agent_pos(), map.get_goal_pos());
-        if remember.contains(&target) {
+        if remember.iter().find(|&&p| dist(p, target) < 0.001).is_some() {
+
             return (None, score);
         } else {
             remember.push(target);
